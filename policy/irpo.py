@@ -73,11 +73,17 @@ class IRPO_Learner(Base):
         # critic l2 regularization
         self.l2_reg = l2_reg
 
+        self.irm_weight = 1.0
+
         # define neural networks
         self.actor = actor
         self.critic = critic
         # intrinsic reward function class
         self.intrinsic_reward_fn = intrinsic_reward_fn
+
+        self.base_critic_optimizer = torch.optim.Adam(
+            self.critic.parameters(), lr=self.critic_lr
+        )
 
         # define critics for extrinsic and intrinsic rewards
         self.extrinsic_critics = nn.ModuleList(
@@ -125,7 +131,9 @@ class IRPO_Learner(Base):
             "dist": metaData["dist"],
         }
 
-    def learn(self, env: gym.Env, sampler: OnlineSampler, seed: int):
+    def learn(
+        self, env: gym.Env, sampler: OnlineSampler, seed: int, learning_progress: float
+    ):
         # === Set it to training mode === #
         self.train()
 
@@ -142,6 +150,9 @@ class IRPO_Learner(Base):
         init_batch, sample_time = sampler.collect_samples(env, self.actor, seed)
         self.actor.record_state_visitations(init_batch["states"], alpha=1.0)
         total_timesteps += init_batch["states"].shape[0]
+
+        # === UPDATE BASE CRITIC AND GET TRUE GRADIENTS === #
+        # base_gradients = self.learn_base_policy(init_batch)
 
         # === UPDATE VIA GRADIENT CHAIN === #
         loss_dict_list = []
@@ -183,7 +194,7 @@ class IRPO_Learner(Base):
                     actor_clone,
                     gradients,
                     avg_intrinsic_rewards,
-                ) = self.learn_model(actor, batch, i, prefix)
+                ) = self.learn_exploratory_policy(actor, batch, i, prefix)
 
                 # === Logging the outputs of inner-level update === #
                 # This is important as it retains the actor with computational graph
@@ -239,6 +250,13 @@ class IRPO_Learner(Base):
             for grads_per_param in outer_gradients_transposed
         )
 
+        # === convex combination of IRPO gradient with true gradient === #
+        irm_weight = self.irm_weight * learning_progress
+        # gradients = tuple(
+        #     (1 - irm_weight) * g + irm_weight * true_g
+        #     for g, true_g in zip(gradients, base_gradients)
+        # )
+
         # === Perform outer-level update === #
         backtrack_iter, backtrack_success = self.learn_outer_level_polocy(
             states=init_batch["states"],
@@ -275,6 +293,7 @@ class IRPO_Learner(Base):
         loss_dict[f"{self.name}/analytics/Backtrack_success"] = backtrack_success
         loss_dict[f"{self.name}/analytics/target_kl"] = self.target_kl
         loss_dict[f"{self.name}/analytics/inner_actor_lr"] = self.inner_actor_lr
+        loss_dict[f"{self.name}/analytics/irm_weight"] = irm_weight
 
         loss_dict.update(self.intrinsic_reward_fn.loss_dict)
 
@@ -289,7 +308,69 @@ class IRPO_Learner(Base):
 
         return loss_dict, total_timesteps, visitation_dict
 
-    def learn_model(self, actor: nn.Module, batch: dict, i: int, prefix: str):
+    def learn_base_policy(self, batch: dict):
+        # === Set it to training mode === #
+        self.train()
+
+        # === Prepare ingredients === #
+        states = self.preprocess_state(batch["states"])
+        actions = self.preprocess_state(batch["actions"])
+        rewards = self.preprocess_state(batch["rewards"])
+        terminals = self.preprocess_state(batch["terminals"])
+        old_logprobs = self.preprocess_state(batch["logprobs"])
+
+        # === Compute advantages and returns === #
+        with torch.no_grad():
+            values = self.critic(states)
+            advantages, returns = estimate_advantages(
+                rewards,
+                terminals,
+                values,
+                gamma=self.gamma,
+                gae=self.gae,
+            )
+
+        # === Prepare for critic learning === #
+        batch_size = states.shape[0]
+        critic_iteration = 5
+        mb_size = batch_size // critic_iteration
+        perm = torch.randperm(batch_size)
+
+        # === Learn a base critic === #
+        critic_losses = []
+        for j in range(critic_iteration):
+            indices = perm[j * mb_size : (j + 1) * mb_size]
+
+            critic_loss = self.critic_loss(
+                self.critic, states[indices], returns[indices]
+            )
+            critic_losses.append(critic_loss.item())
+
+            self.base_critic_optimizer.zero_grad()
+            critic_loss.backward()
+            nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
+            self.base_critic_optimizer.step()
+
+        critic_loss = sum(critic_losses) / len(critic_losses)
+
+        # === Learn exploratory policy === #
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        actor_loss, entropy_loss = self.actor_loss(
+            self.actor, states, actions, old_logprobs, advantages
+        )
+
+        loss = actor_loss - entropy_loss
+
+        # Compute gradients
+        gradients = torch.autograd.grad(loss, self.actor.parameters())
+        gradients = self.clip_grad_norm(gradients, max_norm=0.5)
+
+        return gradients
+
+    def learn_exploratory_policy(
+        self, actor: nn.Module, batch: dict, i: int, prefix: str
+    ):
         # === Set it to training mode === #
         self.train()
 

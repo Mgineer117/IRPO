@@ -74,10 +74,11 @@ class IRPOTrainer:
             while pbar.n < self.timesteps + self.init_timesteps:
                 current_step = pbar.n
 
-                (loss_dict, timesteps, visitation_dict) = self.policy.learn(
+                loss_dict, timesteps, visitation_dict = self.policy.learn(
                     self.env,
                     self.sampler,
                     self.seed,
+                    current_step / (self.timesteps + self.init_timesteps)
                 )
                 current_step = pbar.n + timesteps
 
