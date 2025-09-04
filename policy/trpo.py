@@ -164,8 +164,8 @@ class TRPO_Learner(Base):
             mb_states = states[indices]
             mb_returns = returns[indices]
 
-            value_loss, l2_loss = self.critic_loss(mb_states, mb_returns)
-            loss = value_loss + l2_loss
+            value_loss = self.critic_loss(mb_states, mb_returns)
+            loss = value_loss
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -186,7 +186,6 @@ class TRPO_Learner(Base):
             f"{self.name}/loss/actor_loss": actor_loss.item(),
             f"{self.name}/loss/entropy_loss": entropy_loss.item(),
             f"{self.name}/loss/value_loss": value_loss.item(),
-            f"{self.name}/loss/l2_loss": l2_loss.item(),
             f"{self.name}/analytics/backtrack_iter": i,
             f"{self.name}/analytics/backtrack_success": int(success),
             f"{self.name}/analytics/klDivergence": kl.item(),
@@ -245,8 +244,5 @@ class TRPO_Learner(Base):
     def critic_loss(self, states: torch.Tensor, returns: torch.Tensor):
         mb_values = self.critic(states)
         value_loss = self.mse_loss(mb_values, returns)
-        l2_loss = (
-            sum(param.pow(2).sum() for param in self.critic.parameters()) * self.l2_reg
-        )
 
-        return value_loss, l2_loss
+        return value_loss

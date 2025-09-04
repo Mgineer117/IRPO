@@ -144,7 +144,6 @@ class HRL_Learner(Base):
         losses = []
         actor_losses = []
         value_losses = []
-        l2_losses = []
         entropy_losses = []
 
         clip_fractions = []
@@ -164,10 +163,9 @@ class HRL_Learner(Base):
                 )
 
                 # 1. Critic Loss (with optional regularization)
-                value_loss, l2_loss = self.critic_loss(mb_states, mb_returns)
+                value_loss = self.critic_loss(mb_states, mb_returns)
                 # Track value loss for logging
                 value_losses.append(value_loss.item())
-                l2_losses.append(l2_loss.item())
 
                 # 2. actor Loss
                 actor_loss, entropy_loss, clip_fraction, kl_div = self.actor_loss(
@@ -175,7 +173,7 @@ class HRL_Learner(Base):
                 )
 
                 # Total loss
-                loss = actor_loss - entropy_loss + 0.5 * value_loss + l2_loss
+                loss = actor_loss - entropy_loss + 0.5 * value_loss
 
                 # Track actor loss for logging
                 losses.append(loss.item())
@@ -210,7 +208,6 @@ class HRL_Learner(Base):
             f"{self.name}/loss/loss": np.mean(losses),
             f"{self.name}/loss/actor_loss": np.mean(actor_losses),
             f"{self.name}/loss/value_loss": np.mean(value_losses),
-            f"{self.name}/loss/l2_loss": np.mean(l2_losses),
             f"{self.name}/loss/entropy_loss": np.mean(entropy_losses),
             f"{self.name}/analytics/clip_fraction": np.mean(clip_fractions),
             f"{self.name}/analytics/klDivergence": target_kl[-1],
@@ -270,8 +267,5 @@ class HRL_Learner(Base):
     def critic_loss(self, mb_states: torch.Tensor, mb_returns: torch.Tensor):
         mb_values = self.critic(mb_states)
         value_loss = self.mse_loss(mb_values, mb_returns)
-        l2_loss = (
-            sum(param.pow(2).sum() for param in self.critic.parameters()) * self.l2_reg
-        )
 
-        return value_loss, l2_loss
+        return value_loss

@@ -195,7 +195,6 @@ class DRNDPPO_Learner(Base):
         losses = []
         actor_losses = []
         value_losses = []
-        l2_losses = []
         entropy_losses = []
         drnd_losses = []
 
@@ -220,12 +219,9 @@ class DRNDPPO_Learner(Base):
                 )
 
                 # 1. Critic Loss (with optional regularization)
-                value_loss, l2_loss = self.critic_loss(
-                    mb_states, mb_ext_returns, mb_int_returns
-                )
+                value_loss = self.critic_loss(mb_states, mb_ext_returns, mb_int_returns)
                 # Track value loss for logging
                 value_losses.append(value_loss.item())
-                l2_losses.append(l2_loss.item())
 
                 # 2. actor Loss
                 actor_loss, entropy_loss, clip_fraction, kl_div = self.actor_loss(
@@ -246,9 +242,7 @@ class DRNDPPO_Learner(Base):
                     break
 
                 # Total loss
-                loss = (
-                    actor_loss - entropy_loss + 0.5 * value_loss + l2_loss + drnd_loss
-                )
+                loss = actor_loss - entropy_loss + 0.5 * value_loss + drnd_loss
                 losses.append(loss.item())
 
                 # Update critic parameters
@@ -278,7 +272,6 @@ class DRNDPPO_Learner(Base):
             f"{self.name}/loss/loss": np.mean(losses),
             f"{self.name}/loss/actor_loss": np.mean(actor_losses),
             f"{self.name}/loss/value_loss": np.mean(value_losses),
-            f"{self.name}/loss/l2_loss": np.mean(l2_losses),
             f"{self.name}/loss/entropy_loss": np.mean(entropy_losses),
             f"{self.name}/loss/drnd_loss": np.mean(drnd_losses),
             f"{self.name}/analytics/clip_fraction": np.mean(clip_fractions),
@@ -355,17 +348,7 @@ class DRNDPPO_Learner(Base):
 
         value_loss = ext_value_loss + int_value_loss
 
-        ext_l2_loss = (
-            sum(param.pow(2).sum() for param in self.critic.parameters()) * self.l2_reg
-        )
-        int_l2_loss = (
-            sum(param.pow(2).sum() for param in self.drnd_critic.parameters())
-            * self.l2_reg
-        )
-
-        l2_loss = ext_l2_loss + int_l2_loss
-
-        return value_loss, l2_loss
+        return value_loss
 
     def drnd_loss(self, next_states: torch.Tensor):
         """Curiosity-driven(Distributional Random Network Distillation)"""
