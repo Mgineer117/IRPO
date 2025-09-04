@@ -595,8 +595,4 @@ class IRPO_Learner(Base):
         # where the outliers are rarely achieved reward in sparse-reward environments
         value_loss = self.mse_loss(values, returns)
 
-        l2_loss = sum(param.pow(2).sum() for param in critic.parameters()) * self.l2_reg
-
-        value_loss += l2_loss
-
         return value_loss
