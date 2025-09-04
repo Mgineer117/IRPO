@@ -389,6 +389,8 @@ class IRPO_Learner(Base):
         # === Compute advantages and returns === #
         with torch.no_grad():
             extrinsic_values = self.extrinsic_critics[i](states)
+            intrinsic_values = self.intrinsic_critics[i](states)
+
             extrinsic_advantages, extrinsic_returns = estimate_advantages(
                 extrinsic_rewards,
                 terminals,
@@ -396,7 +398,6 @@ class IRPO_Learner(Base):
                 gamma=self.gamma,
                 gae=self.gae,
             )
-            intrinsic_values = self.intrinsic_critics[i](states)
             intrinsic_advantages, intrinsic_returns = estimate_advantages(
                 intrinsic_rewards,
                 terminals,
@@ -411,38 +412,41 @@ class IRPO_Learner(Base):
         mb_size = batch_size // critic_iteration
         perm = torch.randperm(batch_size)
 
-        # === Learn extrinsic and intrinsic critic === #
+        # === Learn extrinsic critic === #
         extrinsic_critic = self.extrinsic_critics[i]
         extrinsic_optim = self.extrinsic_critic_optimizers[i]
 
+        extrinsic_losses = []
+        for j in range(critic_iteration):
+            # randomly sample mini-batch
+            indices = perm[j * mb_size : (j + 1) * mb_size]
+            critic_loss = self.critic_loss(
+                extrinsic_critic, states[indices], extrinsic_returns[indices]
+            )
+            extrinsic_optim.zero_grad()
+            critic_loss.backward()
+            nn.utils.clip_grad_norm_(extrinsic_critic.parameters(), max_norm=0.5)
+            extrinsic_optim.step()
+            extrinsic_losses.append(critic_loss.item())
+
+        extrinsic_critic_loss = sum(extrinsic_losses) / len(extrinsic_losses)
+
+        # === Learn intrinsic critic === #
         intrinsic_critic = self.intrinsic_critics[i]
         intrinsic_optim = self.intrinsic_critic_optimizers[i]
 
-        extrinsic_losses = []
         intrinsic_losses = []
         for j in range(critic_iteration):
             indices = perm[j * mb_size : (j + 1) * mb_size]
-
-            extrinsic_critic_loss = self.critic_loss(
-                extrinsic_critic, states[indices], extrinsic_returns[indices]
-            )
-            intrinsic_critic_loss = self.critic_loss(
+            critic_loss = self.critic_loss(
                 intrinsic_critic, states[indices], intrinsic_returns[indices]
             )
-
-            extrinsic_optim.zero_grad()
-            extrinsic_critic_loss.backward()
-            nn.utils.clip_grad_norm_(extrinsic_critic.parameters(), max_norm=0.5)
-            extrinsic_optim.step()
-            extrinsic_losses.append(extrinsic_critic_loss.item())
-
             intrinsic_optim.zero_grad()
-            intrinsic_critic_loss.backward()
+            critic_loss.backward()
             nn.utils.clip_grad_norm_(intrinsic_critic.parameters(), max_norm=0.5)
             intrinsic_optim.step()
-            intrinsic_losses.append(intrinsic_critic_loss.item())
+            intrinsic_losses.append(critic_loss.item())
 
-        extrinsic_critic_loss = sum(extrinsic_losses) / len(extrinsic_losses)
         intrinsic_critic_loss = sum(intrinsic_losses) / len(intrinsic_losses)
 
         # === Learn exploratory policy === #
