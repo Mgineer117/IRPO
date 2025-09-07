@@ -152,7 +152,7 @@ class IRPO_Learner(Base):
         total_timesteps += init_batch["states"].shape[0]
 
         # === UPDATE BASE CRITIC AND GET TRUE GRADIENTS === #
-        # base_gradients = self.learn_base_policy(init_batch)
+        base_gradients = self.learn_base_policy(init_batch)
 
         # === UPDATE VIA GRADIENT CHAIN === #
         loss_dict_list = []
@@ -234,9 +234,6 @@ class IRPO_Learner(Base):
         # === Identify the most contributing index for logging === #
         most_contributing_index = np.argmax(self.probability_history)
 
-        # === Group by parameter=== #
-        outer_gradients_transposed = list(zip(*outer_gradients))
-
         # === Gradient aggregation === #
         if self.weight_option == "argmax":
             weights = np.zeros_like(self.probability_history)
@@ -245,17 +242,23 @@ class IRPO_Learner(Base):
             weights = self.probability_history
             weights = weights / (weights.sum() + 1e-8)
 
+        # === Group by parameter=== #
+        outer_gradients_transposed = list(zip(*outer_gradients))
         gradients = tuple(
             sum(w * g for w, g in zip(weights, grads_per_param))
             for grads_per_param in outer_gradients_transposed
         )
 
         # === convex combination of IRPO gradient with true gradient === #
-        irm_weight = self.irm_weight * learning_progress
-        # gradients = tuple(
-        #     (1 - irm_weight) * g + irm_weight * true_g
-        #     for g, true_g in zip(gradients, base_gradients)
-        # )
+        # irm_weight = 1.0
+        irm_weight = 0.0
+        # irm_weight = learning_progress
+        # irm_weight = (np.exp(2 * learning_progress) - 1) / (np.e**2 - 1)
+        # irm_weight = np.log(1 + 6 * learning_progress) / np.log(1 + 6 * 1)
+        gradients = tuple(
+            (1 - irm_weight) * g + irm_weight * true_g
+            for g, true_g in zip(gradients, base_gradients)
+        )
 
         # === Perform outer-level update === #
         backtrack_iter, backtrack_success = self.learn_outer_level_polocy(
@@ -317,7 +320,6 @@ class IRPO_Learner(Base):
         actions = self.preprocess_state(batch["actions"])
         rewards = self.preprocess_state(batch["rewards"])
         terminals = self.preprocess_state(batch["terminals"])
-        old_logprobs = self.preprocess_state(batch["logprobs"])
 
         # === Compute advantages and returns === #
         with torch.no_grad():
@@ -329,6 +331,13 @@ class IRPO_Learner(Base):
                 gamma=self.gamma,
                 gae=self.gae,
             )
+
+        # === Learn a base critic === #
+        # critic_loss = self.critic_loss(self.critic, states, returns)
+        # self.base_critic_optimizer.zero_grad()
+        # critic_loss.backward()
+        # nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
+        # self.base_critic_optimizer.step()
 
         # === Prepare for critic learning === #
         batch_size = states.shape[0]
@@ -357,7 +366,7 @@ class IRPO_Learner(Base):
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         actor_loss, entropy_loss = self.actor_loss(
-            self.actor, states, actions, old_logprobs, advantages
+            self.actor, states, actions, advantages
         )
 
         loss = actor_loss - entropy_loss
@@ -384,7 +393,6 @@ class IRPO_Learner(Base):
         extrinsic_rewards = self.preprocess_state(batch["rewards"])
         intrinsic_rewards, source = self.intrinsic_reward_fn(states, next_states, i)
         terminals = self.preprocess_state(batch["terminals"])
-        old_logprobs = self.preprocess_state(batch["logprobs"])
 
         # === Compute advantages and returns === #
         with torch.no_grad():
@@ -402,13 +410,35 @@ class IRPO_Learner(Base):
                 intrinsic_rewards,
                 terminals,
                 intrinsic_values,
-                gamma=self.gamma,
+                gamma=1.0,  # it is easy to optimize with gamma = 1.0 since reward is dense and almost monotonic
                 gae=self.gae,
             )
 
+        # # === Learn critics === #
+        # extrinsic_critic = self.extrinsic_critics[i]
+        # intrinsic_critic = self.intrinsic_critics[i]
+        # extrinsic_optim = self.extrinsic_critic_optimizers[i]
+        # intrinsic_optim = self.intrinsic_critic_optimizers[i]
+
+        # extrinsic_critic_loss = self.critic_loss(
+        #     extrinsic_critic, states, extrinsic_returns
+        # )
+        # extrinsic_optim.zero_grad()
+        # extrinsic_critic_loss.backward()
+        # nn.utils.clip_grad_norm_(extrinsic_critic.parameters(), max_norm=0.5)
+        # extrinsic_optim.step()
+
+        # intrinsic_critic_loss = self.critic_loss(
+        #     intrinsic_critic, states, intrinsic_returns
+        # )
+        # intrinsic_optim.zero_grad()
+        # intrinsic_critic_loss.backward()
+        # nn.utils.clip_grad_norm_(intrinsic_critic.parameters(), max_norm=0.5)
+        # intrinsic_optim.step()
+
         # === Prepare for critic learning === #
         batch_size = states.shape[0]
-        critic_iteration = 5
+        critic_iteration = 4
         mb_size = batch_size // critic_iteration
         perm = torch.randperm(batch_size)
 
@@ -454,9 +484,7 @@ class IRPO_Learner(Base):
         advantages = extrinsic_advantages if prefix == "outer" else intrinsic_advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        actor_loss, entropy_loss = self.actor_loss(
-            actor, states, actions, old_logprobs, advantages
-        )
+        actor_loss, entropy_loss = self.actor_loss(actor, states, actions, advantages)
 
         if prefix == "outer":
             # include the entropy loss in the outer-level policy update
@@ -575,18 +603,13 @@ class IRPO_Learner(Base):
         actor: nn.Module,
         states: torch.Tensor,
         actions: torch.Tensor,
-        old_logprobs: torch.Tensor,
         advantages: torch.Tensor,
     ):
         # === Naive policy gradient loss === #
         _, metaData = actor(states)
         logprobs = actor.log_prob(metaData["dist"], actions)
         entropy = actor.entropy(metaData["dist"])
-        # the ratio should be just one as this is a one-batch update,
-        # but used here for numerical stability
-        ratios = torch.exp(logprobs - old_logprobs)
-
-        actor_loss = -(ratios * advantages).mean()
+        actor_loss = -(logprobs * advantages).mean()
         entropy_loss = self.entropy_scaler * entropy.mean()
 
         return actor_loss, entropy_loss
