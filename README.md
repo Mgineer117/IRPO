@@ -6,6 +6,20 @@
 * **Minjae Cho** - _The Grainger College of Engineering, University of Illinois Urbana-Champaign_ (Correspondance)
 * **Huy T. Tran** - _The Grainger College of Engineering, University of Illinois Urbana-Champaign_
 
+## Citation
+Please cite our paper if you use this code or algorithm for any part of your research or work:
+```
+@misc{cho2026intrinsicrewardpolicyoptimization,
+      title={Intrinsic Reward Policy Optimization for Sparse-Reward Environments}, 
+      author={Minjae Cho and Huy Trong Tran},
+      year={2026},
+      eprint={2601.21391},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2601.21391}, 
+}
+```
+
 ## Prerequisites
 In any local folder, open a terminal and run the following command to download our package into the current directory:
 ```
