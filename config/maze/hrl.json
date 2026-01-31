@@ -1,0 +1,13 @@
+{
+    "hl_timesteps": 6e6,
+    "timesteps": 4e6,
+    "eps_clip": 0.2,
+    "K_epochs": 5,
+    "target_kl": 0.01,
+    "gamma": 0.99,
+    "num_options": 6,
+    "num_minibatch": 4,
+    "minibatch_size": 2048,
+    "intrinsic_reward_mode": "allo",
+    "discount_sampling_factor": 0.9
+}

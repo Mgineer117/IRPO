@@ -1,0 +1,9 @@
+{
+    "timesteps": 5e7,
+    "eps_clip": 0.2,
+    "K_epochs": 5,
+    "target_kl": 0.01,
+    "gamma": 0.999,
+    "num_minibatch": 4,
+    "minibatch_size": 4096
+}

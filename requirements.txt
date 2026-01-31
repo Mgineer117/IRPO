@@ -1,0 +1,17 @@
+gymnasium==1.1.1
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+matplotlib==3.10.6
+moviepy==1.0.3
+mujoco==3.0.0
+numpy==1.23.5
+pandas==2.3.3
+pettingzoo==1.25.0
+scikit-learn==1.7.2
+scipy==1.15.3
+sympy==1.14.0
+tensorboard==2.20.0
+tensorboard-data-server==0.7.2
+torch==2.7.0
+tqdm==4.67.1
+wandb==0.22.2
