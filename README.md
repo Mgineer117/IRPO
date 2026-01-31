@@ -4,7 +4,7 @@
 
 
 ## Authors
-* **Minjae Cho** - _The Grainger College of Engineering, University of Illinois Urbana-Champaign_ (Correspondance)
+* **Minjae Cho** (Correspondance) - _The Grainger College of Engineering, University of Illinois Urbana-Champaign_ 
 * **Huy T. Tran** - _The Grainger College of Engineering, University of Illinois Urbana-Champaign_
 
 ## Citation
