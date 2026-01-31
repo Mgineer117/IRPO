@@ -139,25 +139,25 @@ def get_args():
         help="Specifies the variant of the IRPO algorithm to use. Choices: {'irpo', 'irpo_lr', 'irpo_pick', 'irpo_blend', 'irpo_is'}.",
     )
     parser.add_argument(
-        "--outer-level-update-mode",
+        "--base-policy-update-mode",
         type=str,
         default="trpo",
-        help="The optimization strategy for the meta-update (outer loop). 'trpo' uses Trust Region updates, 'sgd' uses standard gradient descent.",
+        help="The optimization strategy for the base policy update. 'trpo' uses Trust Region updates, 'sgd' uses standard gradient ascent.",
     )
     parser.add_argument(
-        "--outer-actor-lr",
+        "--base-actor-lr",
         type=float,
         default=None,
-        help="The learning rate for the outer-level actor update (ONLY required if outer-level-update-mode is 'sgd').",
+        help="The learning rate for the base policy actor update (ONLY required if base-policy-update-mode is 'sgd').",
     )
     parser.add_argument(
-        "--inner-actor-lr",
+        "--exploratory-actor-lr",
         type=float,
         default=None,
         help="The learning rate used for updating the exploratory policies within the inner loop optimization.",
     )
     parser.add_argument(
-        "--num-inner-updates",
+        "--num-exploratory-updates",
         type=int,
         default=None,
         help="The number of gradient updates performed on the exploratory policies per iteration of the inner loop.",

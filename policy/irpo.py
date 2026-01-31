@@ -27,9 +27,10 @@ class IRPO_Learner(Base):
     Intrinsic Reward Policy Optimization (IRPO) Learner.
 
     This class implements a bi-level optimization framework:
-    1. Inner Loop: Generates 'exploratory policies' by optimizing purely for specific intrinsic rewards.
-    2. Outer Loop: Updates the 'base policy' to maximize extrinsic reward by aggregating gradients
-       from the most promising exploratory policies, using TRPO to ensure stable updates.
+    1. Exploratory Phase (Inner Loop): Generates 'exploratory policies' by optimizing purely
+       for specific intrinsic rewards.
+    2. Base Policy Phase (Outer Loop): Updates the 'base policy' to maximize extrinsic reward
+       by aggregating gradients from the most promising exploratory policies.
     """
 
     def __init__(
@@ -38,10 +39,10 @@ class IRPO_Learner(Base):
         critic: PPO_Critic,
         intrinsic_reward_fn: IntrinsicRewardFunctions,
         timesteps: int,
-        num_inner_updates: int,
-        outer_level_update_mode: str = "trpo",
-        outer_actor_lr: float = 3e-4,
-        inner_actor_lr: float = 3e-4,
+        num_exploratory_updates: int,
+        base_policy_update_mode: str = "trpo",
+        base_actor_lr: float = 3e-4,
+        exploratory_actor_lr: float = 3e-4,
         critic_lr: float = 3e-4,
         entropy_scaler: float = 1e-3,
         target_kl: float = 0.03,
@@ -61,14 +62,14 @@ class IRPO_Learner(Base):
         self.timesteps = timesteps
 
         # IRPO Optimization parameters
-        self.outer_level_update_mode = (
-            outer_level_update_mode  # "trpo" is recommended for stability
+        self.base_policy_update_mode = (
+            base_policy_update_mode  # "trpo" is recommended for stability
         )
-        self.num_inner_updates = num_inner_updates
+        self.num_exploratory_updates = num_exploratory_updates
 
         # Learning rates
-        self.outer_actor_lr = outer_actor_lr  # Only used if outer mode is SGD
-        self.inner_actor_lr = inner_actor_lr  # Used for inner loop exploration
+        self.base_actor_lr = base_actor_lr  # Only used if base mode is SGD
+        self.exploratory_actor_lr = exploratory_actor_lr  # Used for exploratory loop
         self.critic_lr = critic_lr
 
         # Hyperparameters
@@ -178,10 +179,6 @@ class IRPO_Learner(Base):
             # Linear Decay:
             self.temperature = 1.0 - progress_ratio + epsilon
 
-            # OR if you want that Exponential Decay curve (slower at start, faster at end):
-            # curve_value = (np.exp(progress_ratio) - 1) / (np.exp(1.0) - 1)
-            # self.temperature = 1.0 - curve_value + epsilon
-
             # Apply Softmax with decaying temperature
             # High temp (1.0) = Soft weights (Explore)
             # Low temp (0.1) = Sharp weights (Exploit)
@@ -194,16 +191,16 @@ class IRPO_Learner(Base):
     ):
         """
         Main bi-level optimization loop.
-        1. Inner Loop: Updates copies of the actor on intrinsic rewards.
-        2. Backprop: Computes meta-gradients through the inner updates.
-        3. Outer Loop: Updates the base actor on extrinsic objectives.
+        1. Exploratory Phase: Updates copies of the actor on intrinsic rewards.
+        2. Backprop: Computes meta-gradients through the exploratory updates.
+        3. Base Policy Phase: Updates the base actor on extrinsic objectives.
         """
         self.train()
 
         total_timesteps, total_sample_time, total_update_time = 0, 0, 0
         policy_dict, gradient_dict = {}, {}
 
-        # Snapshot the current base policy to start the inner loop
+        # Snapshot the current base policy to start the exploratory loop
         for i in range(self.intrinsic_reward_fn.num_rewards):
             actor_idx = f"{i}_{0}"
             policy_dict[actor_idx] = deepcopy(self.actor)
@@ -215,10 +212,14 @@ class IRPO_Learner(Base):
 
         loss_dict_list = []
 
-        # 2. INNER LOOP: Iterate over each intrinsic reward type
+        # 2. EXPLORATORY PHASE: Iterate over each intrinsic reward type
         for i in range(self.intrinsic_reward_fn.num_rewards):
-            for j in range(self.num_inner_updates):
-                prefix = "outer" if j == self.num_inner_updates - 1 else "inner"
+            for j in range(self.num_exploratory_updates):
+                # Identify if this is a standard exploratory update or the 'base' transition point
+                # (Note: 'base' prefix here denotes the step used for the meta-update calculation)
+                prefix = (
+                    "base" if j == self.num_exploratory_updates - 1 else "exploratory"
+                )
 
                 # Retrieve current step's policy
                 actor_idx = f"{i}_{j}"
@@ -226,7 +227,7 @@ class IRPO_Learner(Base):
                 actor = policy_dict[actor_idx]
 
                 # Sample data: Use Init batch for step 0, new samples for subsequent steps
-                if prefix == "inner":
+                if prefix == "exploratory":
                     if j == 0:
                         batch = deepcopy(init_batch)
                         sample_time = 0
@@ -246,7 +247,7 @@ class IRPO_Learner(Base):
                     + (1 - beta) * batch["rewards"].mean()
                 )
 
-                # Perform Gradient Descent Step (Inner Update)
+                # Perform Gradient Descent Step (Exploratory Update)
                 # This returns the gradients and a cloned, updated actor
                 (
                     loss_dict,
@@ -266,7 +267,7 @@ class IRPO_Learner(Base):
                 # Log intrinsic reward improvements
                 if j == 0:
                     self.init_avg_intrinsic_rewards[str(i)] = avg_intrinsic_rewards
-                elif j == self.num_inner_updates - 1:
+                elif j == self.num_exploratory_updates - 1:
                     self.final_avg_intrinsic_rewards[str(i)] = avg_intrinsic_rewards
 
                 total_timesteps += timesteps
@@ -278,11 +279,11 @@ class IRPO_Learner(Base):
         # This involves Hessian-Vector Products (HVP).
         outer_gradients = []
         for i in range(self.intrinsic_reward_fn.num_rewards):
-            # Start with gradients from the last inner step
-            gradients = gradient_dict[f"{i}_{self.num_inner_updates - 1}"]
+            # Start with gradients from the last exploratory step
+            gradients = gradient_dict[f"{i}_{self.num_exploratory_updates - 1}"]
 
             # Walk backward from last step to 0
-            for j in reversed(range(self.num_inner_updates - 1)):
+            for j in reversed(range(self.num_exploratory_updates - 1)):
                 iter_idx = f"{i}_{j}"
 
                 # Compute (I - lr * Hessian) * gradients using HVP
@@ -292,7 +293,7 @@ class IRPO_Learner(Base):
                     grad_outputs=gradients,
                 )
                 gradients = tuple(
-                    g - self.inner_actor_lr * h for g, h in zip(gradients, Hv)
+                    g - self.exploratory_actor_lr * h for g, h in zip(gradients, Hv)
                 )
             outer_gradients.append(gradients)
 
@@ -308,18 +309,18 @@ class IRPO_Learner(Base):
             for grads_per_param in outer_gradients_transposed
         )
 
-        # 5. OUTER LOOP UPDATE (Base Policy)
+        # 5. BASE POLICY UPDATE (Outer Loop)
         # Apply the aggregated meta-gradient to the base policy using TRPO or SGD
-        backtrack_iter, backtrack_success = self.learn_outer_level_policy(
+        backtrack_iter, backtrack_success = self.learn_base_policy(
             states=init_batch["states"],
             grads=gradients,
         )
 
         # Logging / Visualization preparation
         visitation_dict = {}
-        visitation_dict["visitation map (outer)"] = self.actor.state_visitation
+        visitation_dict["visitation map (base)"] = self.actor.state_visitation
         for i in range(self.intrinsic_reward_fn.num_rewards):
-            idx = f"{i}_{self.num_inner_updates}"
+            idx = f"{i}_{self.num_exploratory_updates}"
             name = f"visitation map ({self.contributing_indices[i]})"
             visitation_dict[name] = policy_dict[idx].state_visitation
 
@@ -337,14 +338,18 @@ class IRPO_Learner(Base):
         loss_dict[f"{self.name}/parameters/num vectors"] = (
             self.intrinsic_reward_fn.num_rewards
         )
-        loss_dict[f"{self.name}/parameters/num_inner_updates"] = self.num_inner_updates
+        loss_dict[f"{self.name}/parameters/num_exploratory_updates"] = (
+            self.num_exploratory_updates
+        )
         loss_dict[f"{self.name}/analytics/Contributing Option"] = int(
             self.contributing_indices[most_contributing_index]
         )
         loss_dict[f"{self.name}/analytics/Backtrack_iter"] = backtrack_iter
         loss_dict[f"{self.name}/analytics/Backtrack_success"] = backtrack_success
         loss_dict[f"{self.name}/analytics/target_kl"] = self.target_kl
-        loss_dict[f"{self.name}/analytics/inner_actor_lr"] = self.inner_actor_lr
+        loss_dict[f"{self.name}/analytics/exploratory_actor_lr"] = (
+            self.exploratory_actor_lr
+        )
         loss_dict[f"{self.name}/analytics/temperature"] = self.temperature
         loss_dict.update(self.intrinsic_reward_fn.loss_dict)
 
@@ -361,7 +366,7 @@ class IRPO_Learner(Base):
         self, actor: nn.Module, batch: dict, i: int, prefix: str
     ):
         """
-        Performs a single inner-loop update.
+        Performs a single exploratory update.
         Calculates intrinsic rewards, updates critics, and performs a differentiable actor update.
         """
         self.train()
@@ -440,16 +445,16 @@ class IRPO_Learner(Base):
         # 3. Update Actor (Exploratory Policy)
         actor_clone = deepcopy(actor)
 
-        # Select advantage based on whether we are in the 'inner' (intrinsic)
-        # or 'outer' (extrinsic) phase of the loop for this specific calculation.
-        advantages = extrinsic_advantages if prefix == "outer" else intrinsic_advantages
+        # Select advantage based on whether we are in the 'exploratory' (intrinsic)
+        # or 'base' (extrinsic) phase of the loop for this specific calculation.
+        advantages = extrinsic_advantages if prefix == "base" else intrinsic_advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         actor_loss, entropy_loss = self.actor_loss(actor, states, actions, advantages)
 
-        # Only add entropy regularization for outer updates to encourage exploration there,
-        # inner updates are already driven by intrinsic rewards.
-        if prefix == "outer":
+        # Only add entropy regularization for base policy updates to encourage exploration there,
+        # exploratory updates are already driven by intrinsic rewards.
+        if prefix == "base":
             loss = actor_loss - entropy_loss
         else:
             loss = actor_loss
@@ -462,10 +467,10 @@ class IRPO_Learner(Base):
         # Manual SGD update on the clone to keep the graph connected
         with torch.no_grad():
             for p, g in zip(actor_clone.parameters(), gradients):
-                p -= self.inner_actor_lr * g
+                p -= self.exploratory_actor_lr * g
 
-        # If this is the final inner step, save this policy as a potential inference policy
-        if prefix == "outer":
+        # If this is the final exploratory step, save this policy as a potential inference policy
+        if prefix == "base":
             self.Nth_exploratory_policies[str(i)] = actor_clone
 
         # Update Intrinsic Reward Generator (if it has learnable parameters, e.g., DRND)
@@ -506,7 +511,7 @@ class IRPO_Learner(Base):
             torch.mean(intrinsic_rewards).item(),
         )
 
-    def learn_outer_level_policy(
+    def learn_base_policy(
         self,
         states: np.ndarray,
         grads: tuple[torch.Tensor],
@@ -520,7 +525,7 @@ class IRPO_Learner(Base):
         1. Conjugate Gradient to find step direction (using Hessian-Vector Products).
         2. Line Search to ensure KL constraint is met.
         """
-        if self.outer_level_update_mode == "trpo":
+        if self.base_policy_update_mode == "trpo":
             states = self.preprocess_state(states)
             old_actor = deepcopy(self.actor)
 
@@ -561,11 +566,11 @@ class IRPO_Learner(Base):
 
             return i, success
 
-        elif self.outer_level_update_mode == "sgd":
+        elif self.base_policy_update_mode == "sgd":
             # Simple fallback: vanilla Gradient Descent
             with torch.no_grad():
                 for p, g in zip(self.actor.parameters(), grads):
-                    p -= self.outer_actor_lr * g
+                    p -= self.base_actor_lr * g
             return 0, True
 
     def actor_loss(
