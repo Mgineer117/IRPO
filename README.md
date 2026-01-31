@@ -1,4 +1,5 @@
 # Intrinsic Reward Policy Optimization
+[![arXiv](https://img.shields.io/badge/arXiv-2601.21391-b31b1b.svg)](https://arxiv.org/abs/2601.21391)
 <img width="1918" height="626" alt="IRPO" src="https://github.com/user-attachments/assets/ac129e10-304a-4b40-8361-8e82844f5f11" />
 
 
